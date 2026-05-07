@@ -1,0 +1,184 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head> <meta name="author" content="Anileydis Colón">
+<meta name="copyright" content="© 2026 Anileydis Colón">
+<meta name="license" content="CC BY-NC-ND 4.0">
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Segoe UI', sans-serif; color: white; }
+        #webcam { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; filter: brightness(0.4) blur(1px); }
+        #canvas-output { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; display: flex; flex-direction: column; }
+        #header { display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid #d41c1c; background: rgba(0,0,0,0.9); padding: 10px 25px; }
+        .intec-brand { font-size: 1.5em; font-weight: 900; }
+        #mini-instr { background: rgba(212, 28, 28, 0.2); text-align: center; padding: 5px; font-size: 0.9em; border-bottom: 1px solid rgba(255,255,255,0.1); text-transform: uppercase; }
+        #score-container { background: #d41c1c; padding: 5px 20px; border-radius: 20px; font-weight: bold; font-size: 1.2em; box-shadow: 0 0 15px #d41c1c; }
+        #loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <h2 style="color: #d41c1c;">INTEC STEM</h2>
+        <p>Optimizando Escáner de Residuos...</p>
+    </div>
+
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="canvas-output"></canvas>
+
+    <div id="ui-layer">
+        <div id="header">
+            <div class="intec-brand"><span style="color:#d41c1c">INTEC STEM</span> | ECO-LÓGICA</div>
+            <div id="score-container">PUNTOS: <span id="score">0</span></div>
+        </div>
+        <div id="mini-instr">Atrapa con pinza y suelta sobre el zafacón correcto</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('canvas-output');
+        const canvasCtx = canvasElement.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const loading = document.getElementById('loading');
+
+        let score = 0;
+        let items = [];
+        let bins = [];
+        let activeItem = null;
+        let pinchBuffer = 0;
+        let frameCount = 0;
+
+        const itemTypes = [
+            { type: "plastic", color: "#3498db", emoji: "🥤" },
+            { type: "plastic", color: "#3498db", emoji: "🍾" },
+            { type: "plastic", color: "#3498db", emoji: "🛍️" },
+            { type: "plastic", color: "#3498db", emoji: "🧴" },
+            { type: "paper", color: "#f1c40f", emoji: "📦" },
+            { type: "paper", color: "#f1c40f", emoji: "📰" },
+            { type: "paper", color: "#f1c40f", emoji: "🗒️" },
+            { type: "paper", color: "#f1c40f", emoji: "✉️" },
+            { type: "organic", color: "#2ecc71", emoji: "🍌" },
+            { type: "organic", color: "#2ecc71", emoji: "🍎" },
+            { type: "organic", color: "#2ecc71", emoji: "🍕" },
+            { type: "organic", color: "#2ecc71", emoji: "🦴" }
+        ];
+
+        function init() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            const bW = canvasElement.width / 3;
+            const bH = 140;
+            bins = [
+                { type: "plastic", color: "#3498db", label: "PLÁSTICO", x: 0, y: canvasElement.height - bH, w: bW, h: bH, flash: 0, flashColor: "" },
+                { type: "paper", color: "#f1c40f", label: "PAPEL/CARTÓN", x: bW, y: canvasElement.height - bH, w: bW, h: bH, flash: 0, flashColor: "" },
+                { type: "organic", color: "#2ecc71", label: "ORGÁNICO", x: bW * 2, y: canvasElement.height - bH, w: bW, h: bH, flash: 0, flashColor: "" }
+            ];
+        }
+
+        function spawn() {
+            const t = itemTypes[Math.floor(Math.random() * itemTypes.length)];
+            items.push({ ...t, x: Math.random() * (canvasElement.width - 150) + 75, y: -60, speed: 2.2 + Math.random() * 1.5, isCaught: false });
+        }
+
+        const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+
+        hands.onResults(res => {
+            if(loading.style.display !== 'none') loading.style.display = 'none';
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // 1. Dibujar Zafacones con Feedback de Color
+            bins.forEach(b => {
+                canvasCtx.fillStyle = b.flash > 0 ? b.flashColor : b.color;
+                canvasCtx.globalAlpha = b.flash > 0 ? 0.9 : 0.7;
+                canvasCtx.fillRect(b.x, b.y, b.w, b.h);
+                
+                canvasCtx.strokeStyle = "white";
+                canvasCtx.lineWidth = b.flash > 0 ? 8 : 3;
+                canvasCtx.strokeRect(b.x, b.y, b.w, b.h);
+                
+                canvasCtx.fillStyle = b.flash > 0 ? "white" : "black";
+                canvasCtx.font = "bold 22px Arial";
+                canvasCtx.textAlign = "center";
+                canvasCtx.fillText(b.label, b.x + b.w/2, b.y + b.h/2 + 10);
+                if(b.flash > 0) b.flash--;
+            });
+
+            // 2. Dibujar Residuos
+            for (let i = items.length - 1; i >= 0; i--) {
+                let it = items[i];
+                if (!it.isCaught) it.y += it.speed;
+
+                canvasCtx.save();
+                canvasCtx.translate(it.x, it.y);
+                canvasCtx.fillStyle = it.color;
+                canvasCtx.shadowBlur = it.isCaught ? 30 : 10;
+                canvasCtx.beginPath(); canvasCtx.arc(0, 0, 40, 0, 7); canvasCtx.fill();
+                canvasCtx.fillStyle = "white"; canvasCtx.font = "45px Arial";
+                canvasCtx.textAlign = "center";
+                canvasCtx.fillText(it.emoji, 0, 15);
+                canvasCtx.restore();
+
+                if (it.y > canvasElement.height - 130 && !it.isCaught) {
+                    items.splice(i, 1);
+                    score = Math.max(0, score - 2);
+                    scoreEl.innerText = score;
+                }
+            }
+
+            if (frameCount++ % 100 === 0) spawn();
+
+            // 3. Interacción y Lógica de Soltado Corregida
+            if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
+                const lm = res.multiHandLandmarks[0];
+                const ix = (1 - lm[8].x) * canvasElement.width;
+                const iy = lm[8].y * canvasElement.height;
+                const tx = (1 - lm[4].x) * canvasElement.width;
+                const ty = lm[4].y * canvasElement.height;
+                const pinching = Math.sqrt(Math.pow(ix-tx,2) + Math.pow(iy-ty,2)) < 65; // Pinza más sensible
+
+                // Puntero
+                canvasCtx.fillStyle = pinching ? "#00ff00" : "#d41c1c";
+                canvasCtx.beginPath(); canvasCtx.arc(ix, iy, 15, 0, 7); canvasCtx.fill();
+
+                if (pinching) {
+                    if (!activeItem) {
+                        activeItem = items.find(it => !it.isCaught && Math.abs(ix-it.x) < 70 && Math.abs(iy-it.y) < 70);
+                        if(activeItem) activeItem.isCaught = true;
+                    } else {
+                        // El objeto sigue a la mano
+                        activeItem.x = ix;
+                        activeItem.y = iy;
+                    }
+                } else {
+                    // Si soltamos o la pinza se abre
+                    if (activeItem) {
+                        activeItem.isCaught = false;
+                        const bin = bins.find(b => activeItem.x > b.x && activeItem.x < b.x + b.w && activeItem.y > b.y - 50);
+                        
+                        if (bin) {
+                            if (bin.type === activeItem.type) {
+                                score += 10;
+                                bin.flash = 25; bin.flashColor = "#00ff00"; // MARCA VERDE AL ACERTAR
+                            } else {
+                                score = Math.max(0, score - 5);
+                                bin.flash = 25; bin.flashColor = "#ff0000"; // MARCA ROJO AL FALLAR
+                            }
+                            scoreEl.innerText = score;
+                            items.splice(items.indexOf(activeItem), 1);
+                        }
+                        activeItem = null;
+                    }
+                }
+            }
+        });
+
+        const cam = new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 1280, height: 720 });
+        init(); cam.start();
+        window.onresize = init;
+    </script>
+</body>
+</html>
